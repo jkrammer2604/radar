@@ -3,36 +3,64 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Radar Wand-Modus</title>
+    <title>Radar Wand-Modus Fix</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
     <style>
         body { margin: 0; background: #000; color: #fff; font-family: sans-serif; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
-        #video-container { flex: 1; position: relative; background: #000; display: flex; justify-content: center; overflow: hidden; }
-        video, canvas { position: absolute; height: 100%; width: auto; }
-        canvas { opacity: 0; } /* Unsichtbarer Canvas für die Analyse */
-        #overlay { position: absolute; inset: 0; border: 20px solid transparent; pointer-events: none; z-index: 10; }
-        #controls { padding: 15px; background: #111; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; z-index: 20; }
+        
+        #video-container { 
+            flex: 1; position: relative; background: #000; 
+            display: flex; justify-content: center; align-items: center; overflow: hidden; 
+        }
+        
+        /* Das eigentliche Kamerabild */
+        video { 
+            position: absolute; width: 100%; height: 100%; object-fit: cover; z-index: 1; 
+        }
+        
+        /* Unsichtbarer Analyse-Canvas */
+        #analyzer { display: none; } 
+
+        /* Roter/Gelber Rahmen bei Gefahr */
+        #overlay { 
+            position: absolute; inset: 0; border: 20px solid transparent; 
+            pointer-events: none; z-index: 5; transition: border 0.1s;
+        }
+        
+        #distance-info { 
+            position: absolute; top: 20%; width: 100%; text-align: center; 
+            font-size: 5rem; font-weight: 900; z-index: 10; 
+            text-shadow: 0 0 20px #000; pointer-events: none;
+        }
+
+        #controls { 
+            padding: 20px; background: #111; display: grid; 
+            grid-template-columns: 1fr 1fr; gap: 10px; z-index: 20; 
+            border-top: 2px solid #333;
+        }
+        
         .full { grid-column: span 2; }
-        button, select { padding: 15px; border-radius: 10px; border: none; background: #333; color: white; font-size: 1rem; }
-        #distance-info { position: absolute; top: 20px; width: 100%; text-align: center; font-size: 4rem; font-weight: 800; z-index: 15; text-shadow: 0 0 15px #000; }
+        button, select { padding: 18px; border-radius: 12px; border: none; background: #333; color: white; font-size: 1.1rem; }
+        input[type=range] { width: 100%; margin: 10px 0; }
+        label { font-size: 0.8rem; color: #888; }
     </style>
 </head>
 <body>
 
     <div id="video-container">
-        <video id="webcam" autoplay playsinline></video>
-        <canvas id="analyzer"></canvas>
+        <video id="webcam" autoplay playsinline muted></video>
+        <canvas id="analyzer" width="64" height="64"></canvas>
         <div id="overlay"></div>
-        <div id="distance-info">STOP</div>
+        <div id="distance-info">BEREIT</div>
     </div>
 
     <div id="controls">
         <select id="cameraSelect" class="full"></select>
         <button id="toggleSound" style="background: #007aff;">TON: AN</button>
         <div class="full">
-            <label style="font-size: 0.7rem; color: #777;">WAND-EMPFINDLICHKEIT (Niedriger = reagiert früher):</label>
-            <input type="range" id="sensRange" min="5" max="60" value="15" style="width:100%">
+            <label>SENSITIVITÄT (Wand & Objekte):</label>
+            <input type="range" id="sensRange" min="5" max="60" value="20">
         </div>
         <button id="startBtn" class="full" style="background: #28a745; font-weight: bold;">START</button>
     </div>
@@ -48,6 +76,7 @@
         
         let model, audioCtx, lastBeep = 0, smoothedArea = 0;
         let prevFrameData = null;
+        let soundOn = true;
 
         async function getCams() {
             const devices = await navigator.mediaDevices.enumerateDevices();
@@ -57,7 +86,7 @@
         getCams();
 
         function beep(f, d) {
-            if (!audioCtx || audioCtx.state !== 'running') return;
+            if (!audioCtx || !soundOn || audioCtx.state !== 'running') return;
             const o = audioCtx.createOscillator(), g = audioCtx.createGain();
             o.type = 'sine'; o.frequency.value = f;
             g.gain.setValueAtTime(0.1, audioCtx.currentTime);
@@ -67,19 +96,15 @@
         }
 
         function analyzeWall() {
-            // Wir zeichnen ein kleines Abbild für die Analyse
             ctx.drawImage(video, 0, 0, 64, 64);
             const currFrame = ctx.getImageData(0, 0, 64, 64).data;
             let diff = 0;
-
             if (prevFrameData) {
                 for (let i = 0; i < currFrame.length; i += 4) {
-                    // Wir messen die Veränderung der Helligkeit
                     diff += Math.abs(currFrame[i] - prevFrameData[i]);
                 }
             }
             prevFrameData = currFrame;
-            // Normalisierter Wert für "Bewegung/Annäherung"
             return diff / (64 * 64 * 3); 
         }
 
@@ -88,41 +113,39 @@
             const wallDiff = analyzeWall();
             let frameMax = 0;
 
-            // 1. KI-Check (für Autos, Personen etc.)
             for (let p of predictions) {
-                if (p.score > 0.4) {
+                if (p.score > 0.45) {
                     const a = (p.bbox[2] * p.bbox[3]) / (video.videoWidth * video.videoHeight);
                     if (a > frameMax) frameMax = a;
                 }
             }
 
-            // 2. Wand-Check: Wenn die KI nichts sieht, aber die Pixel sich stark ändern
-            // (Simuliert die optische Vergrößerung einer Fläche)
-            if (frameMax < 0.1 && wallDiff > 15) {
-                 frameMax = wallDiff / 40; // Wand-Bewegung in "Fläche" umrechnen
+            // Wand-Logik: Falls KI nichts sieht, aber Pixel-Änderung hoch ist
+            if (frameMax < 0.1 && wallDiff > 12) {
+                 frameMax = wallDiff / 35; 
             }
 
-            // Schnelle Glättung
-            smoothedArea = (smoothedArea * 0.4) + (frameMax * 0.6);
+            // Schnelle Reaktion
+            smoothedArea = (smoothedArea * 0.5) + (frameMax * 0.5);
 
             const threshold = document.getElementById('sensRange').value / 100;
             const now = audioCtx.currentTime;
 
             if (smoothedArea > threshold) {
                 if (smoothedArea > 0.6) {
-                    distInfo.innerText = "!!! STOPP !!!";
+                    distInfo.innerText = "STOPP";
                     distInfo.style.color = "red";
                     overlay.style.borderColor = "red";
-                    if (now - lastBeep > 0.07) { beep(1200, 0.1); lastBeep = now; }
+                    if (now - lastBeep > 0.08) { beep(1200, 0.1); lastBeep = now; }
                 } else {
-                    distInfo.innerText = "WAND/OBJEKT";
+                    distInfo.innerText = "ACHTUNG";
                     distInfo.style.color = "yellow";
                     overlay.style.borderColor = "yellow";
-                    let interval = Math.max(0.07, 0.6 - (smoothedArea * 0.9));
+                    let interval = Math.max(0.08, 0.6 - (smoothedArea * 0.9));
                     if (now - lastBeep > interval) { beep(800, 0.05); lastBeep = now; }
                 }
             } else {
-                distInfo.innerText = "FREI";
+                distInfo.innerText = "OK";
                 distInfo.style.color = "#28a745";
                 overlay.style.borderColor = "transparent";
             }
@@ -131,12 +154,20 @@
 
         startBtn.onclick = async () => {
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            const s = await navigator.mediaDevices.getUserMedia({ video: { deviceId: camSelect.value } });
+            const s = await navigator.mediaDevices.getUserMedia({ 
+                video: { deviceId: camSelect.value ? { exact: camSelect.value } : undefined } 
+            });
             video.srcObject = s;
-            startBtn.innerText = "KALIBRIERE...";
+            startBtn.innerText = "LADE KI...";
             model = await cocoSsd.load();
             startBtn.style.display = "none";
             detect();
+        };
+
+        document.getElementById('toggleSound').onclick = function() {
+            soundOn = !soundOn;
+            this.innerText = soundOn ? "TON: AN" : "TON: AUS";
+            this.style.background = soundOn ? "#007aff" : "#444";
         };
     </script>
 </body>
