@@ -3,45 +3,46 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Radar Ultra-Smooth</title>
+    <title>Radar Ultra-Stabil</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
     <style>
-        body { margin: 0; background: #000; color: white; font-family: sans-serif; display: flex; flex-direction: column; height: 100vh; }
-        #video-container { position: relative; flex: 1; background: #000; display: flex; justify-content: center; align-items: center; overflow: hidden; }
-        video { max-width: 100%; max-height: 100%; }
-        #controls { padding: 15px; background: #1a1a1a; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; border-top: 1px solid #333; }
+        body { margin: 0; background: #000; color: #fff; font-family: -apple-system, sans-serif; display: flex; flex-direction: column; height: 100vh; }
+        #video-container { flex: 1; position: relative; background: #000; overflow: hidden; display: flex; justify-content: center; }
+        video { height: 100%; width: auto; }
+        #overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: 10px solid transparent; pointer-events: none; transition: border 0.2s; }
+        
+        #controls { padding: 20px; background: #1a1a1a; display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
         .full { grid-column: span 2; }
-        button, select, input { padding: 15px; border-radius: 10px; border: none; font-size: 1rem; background: #333; color: white; }
-        button.active { background: #2ecc71; }
-        button.off { background: #e74c3c; }
-        #distance-info { position: absolute; top: 10%; width: 100%; text-align: center; font-size: 4rem; font-weight: bold; text-shadow: 0 0 20px rgba(0,0,0,0.8); pointer-events: none; }
-        .label { font-size: 0.85rem; color: #888; margin-bottom: 5px; display: block; }
+        
+        button, select { padding: 18px; border-radius: 12px; border: none; background: #333; color: white; font-size: 1rem; -webkit-appearance: none; }
+        .active { background: #28a745; }
+        .off { background: #444; color: #888; }
+        
+        input[type=range] { width: 100%; margin: 15px 0; }
+        #distance-info { position: absolute; top: 30px; width: 100%; text-align: center; font-size: 5rem; font-weight: 900; pointer-events: none; }
     </style>
 </head>
 <body>
 
     <div id="video-container">
         <video id="webcam" autoplay playsinline></video>
-        <div id="distance-info">---</div>
+        <div id="overlay"></div>
+        <div id="distance-info"></div>
     </div>
 
     <div id="controls">
-        <div class="full">
-            <span class="label">Kamera:</span>
-            <select id="cameraSelect"></select>
-        </div>
-
-        <button id="toggleSound" class="active">🔊 Ton</button>
-        <button id="toggleMsg" class="active">💬 Text</button>
+        <select id="cameraSelect" class="full"></select>
+        
+        <button id="toggleSound" class="active">TON AN</button>
+        <button id="toggleMsg" class="active">TEXT AN</button>
 
         <div class="full">
-            <span class="label">Filter (Reaktion erst ab % Objektgröße im Bild):</span>
-            <input type="range" id="sensRange" min="5" max="80" value="20">
-            <div id="sensVal" style="text-align:right; font-size: 0.8rem;">20%</div>
+            <label style="font-size: 0.8rem; color: #888;">REAKTIONS-SCHWELLE (Höher = weniger Fehlalarme):</label>
+            <input type="range" id="sensRange" min="10" max="90" value="40">
         </div>
 
-        <button id="startBtn" class="full" style="background: #2ecc71; font-weight: bold;">SYSTEM STARTEN</button>
+        <button id="startBtn" class="full" style="background: #007aff; font-weight: bold;">SYSTEM AKTIVIEREN</button>
     </div>
 
     <script>
@@ -52,101 +53,91 @@
         const soundBtn = document.getElementById('toggleSound');
         const msgBtn = document.getElementById('toggleMsg');
         const sensRange = document.getElementById('sensRange');
-        const sensVal = document.getElementById('sensVal');
-        
-        let model, audioCtx, nextBeepTime = 0;
-        let soundEnabled = true;
-        let msgEnabled = true;
-        let areaHistory = [0,0,0,0,0]; // Buffer für Smoothing
+        const overlay = document.getElementById('overlay');
 
-        async function getDevices() {
+        let model, audioCtx;
+        let soundOn = true, msgOn = true;
+        let lastBeepTime = 0;
+        let smoothedArea = 0; // Der "Stoßdämpfer"-Wert
+
+        // Kameras finden
+        async function getCams() {
             const devices = await navigator.mediaDevices.enumerateDevices();
             const videoDevices = devices.filter(d => d.kind === 'videoinput');
-            camSelect.innerHTML = videoDevices.map((d, i) => 
-                `<option value="${d.deviceId}">${d.label || 'Cam ' + (i+1)}</option>`
-            ).join('');
+            camSelect.innerHTML = videoDevices.map((d, i) => `<option value="${d.deviceId}">${d.label || 'Kamera ' + (i+1)}</option>`).join('');
         }
-        getDevices();
+        getCams();
 
-        function playBeep(freq, dur) {
-            if (!audioCtx || !soundEnabled || audioCtx.state !== 'running') return;
+        function beep(freq, dur) {
+            if (!audioCtx || !soundOn) return;
             const osc = audioCtx.createOscillator();
-            const gain = audioCtx.createGain();
-            osc.frequency.value = freq;
+            const g = audioCtx.createGain();
             osc.type = 'sine';
-            gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
-            gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
-            osc.connect(gain);
-            gain.connect(audioCtx.destination);
+            osc.frequency.value = freq;
+            g.gain.setValueAtTime(0.1, audioCtx.currentTime);
+            g.gain.linearRampToValueAtTime(0.0001, audioCtx.currentTime + dur);
+            osc.connect(g);
+            g.connect(audioCtx.destination);
             osc.start();
             osc.stop(audioCtx.currentTime + dur);
         }
 
-        async function detect() {
-            if (!model) return;
+        async function loop() {
             const predictions = await model.detect(video);
-            
-            // Nur Objekte finden, die eine gewisse Grund-Wahrscheinlichkeit haben (>60%)
-            let currentFrameMax = 0;
-            predictions.forEach(p => {
-                if(p.score > 0.6) {
-                    const area = (p.bbox[2] * p.bbox[3]) / (video.videoWidth * video.videoHeight);
-                    if (area > currentFrameMax) currentFrameMax = area;
-                }
-            });
+            let frameMaxArea = 0;
 
-            // Smoothing: Durchschnitt der letzten 5 Messungen berechnen
-            areaHistory.shift();
-            areaHistory.push(currentFrameMax);
-            const smoothedArea = areaHistory.reduce((a, b) => a + b) / areaHistory.length;
+            // FILTER: Wir suchen nur nach relevanten Objekten mit hoher Sicherheit
+            for (let p of predictions) {
+                if (p.score > 0.65) { 
+                    const area = (p.bbox[2] * p.bbox[3]) / (video.videoWidth * video.videoHeight);
+                    if (area > frameMaxArea) frameMaxArea = area;
+                }
+            }
+
+            // TIEFPASS-FILTER (Smoothing)
+            // Wir nehmen nur 20% des neuen Wertes und 80% des alten. 
+            // Das verhindert extremes Springen der Werte.
+            smoothedArea = (smoothedArea * 0.8) + (frameMaxArea * 0.2);
 
             const threshold = sensRange.value / 100;
             const now = audioCtx.currentTime;
 
             if (smoothedArea > threshold) {
-                // Skalierung für Warnstufen
-                if (smoothedArea > 0.7) {
-                    if (msgEnabled) { distInfo.innerText = "STOPP"; distInfo.style.color = "#ff4d4d"; }
-                    if (now > nextBeepTime) { playBeep(1200, 0.15); nextBeepTime = now + 0.05; }
+                // WARN-LOGIK
+                if (smoothedArea > 0.75) {
+                    // STOPP (Dauerton-Effekt)
+                    if (msgOn) { distInfo.innerText = "STOPP"; distInfo.style.color = "red"; }
+                    overlay.style.borderColor = "red";
+                    if (now - lastBeepTime > 0.08) { beep(1000, 0.1); lastBeepTime = now; }
                 } else {
-                    if (msgEnabled) { distInfo.innerText = "⚠️"; distInfo.style.color = "#ffcc00"; }
-                    // Schnelligkeit des Piepens berechnen
-                    let pause = 0.8 - (smoothedArea * 1.1);
-                    if (now > nextBeepTime) { playBeep(800, 0.08); nextBeepTime = now + Math.max(0.08, pause); }
+                    // ANNÄHERUNG
+                    if (msgOn) { distInfo.innerText = "⚠️"; distInfo.style.color = "yellow"; }
+                    overlay.style.borderColor = "yellow";
+                    let interval = Math.max(0.08, 0.7 - (smoothedArea * 0.9));
+                    if (now - lastBeepTime > interval) { beep(800, 0.06); lastBeepTime = now; }
                 }
             } else {
-                distInfo.innerText = msgEnabled ? "OK" : "";
-                distInfo.style.color = "#2ecc71";
+                if (msgOn) distInfo.innerText = "OK";
+                overlay.style.borderColor = "transparent";
+                distInfo.style.color = "#28a745";
             }
-            requestAnimationFrame(detect);
+
+            requestAnimationFrame(loop);
         }
 
-        sensRange.oninput = () => sensVal.innerText = sensRange.value + "%";
-
-        soundBtn.onclick = () => {
-            soundEnabled = !soundEnabled;
-            soundBtn.className = soundEnabled ? "active" : "off";
-        };
-
-        msgBtn.onclick = () => {
-            msgEnabled = !msgEnabled;
-            msgBtn.className = msgEnabled ? "active" : "off";
-            if (!msgEnabled) distInfo.innerText = "";
-        };
-
         startBtn.onclick = async () => {
-            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            if (audioCtx.state === 'suspended') await audioCtx.resume();
-            
-            startBtn.innerText = "LADE KI...";
-            const stream = await navigator.mediaDevices.getUserMedia({ 
-                video: { deviceId: camSelect.value ? { exact: camSelect.value } : undefined } 
-            });
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            startBtn.innerText = "WARTE AUF KAMERA...";
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: camSelect.value } });
             video.srcObject = stream;
+            startBtn.innerText = "LADE KI...";
             model = await cocoSsd.load();
             startBtn.style.display = "none";
-            detect();
+            loop();
         };
+
+        soundBtn.onclick = () => { soundOn = !soundOn; soundBtn.className = soundOn ? "active" : "off"; };
+        msgBtn.onclick = () => { msgOn = !msgOn; msgBtn.className = msgOn ? "active" : "off"; if(!msgOn) distInfo.innerText=""; };
     </script>
 </body>
 </html>
