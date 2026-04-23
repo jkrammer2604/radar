@@ -3,64 +3,53 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>iPad Radar Assistent</title>
+    <title>iPad Park-Radar</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
     <style>
-        body { 
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
-            text-align: center; 
-            background: #000; 
-            color: #fff; 
-            margin: 0; 
-            overflow: hidden; 
+        body { margin: 0; background: #000; color: white; font-family: sans-serif; text-align: center; overflow: hidden; }
+        video { width: 100%; height: auto; border-bottom: 2px solid #333; transform: scaleX(-1); } /* Spiegelbild für einfacheres Rangieren */
+        #ui { padding: 20px; }
+        .distance-display { font-size: 3rem; font-weight: bold; margin: 10px; }
+        #startBtn { 
+            padding: 20px 40px; font-size: 1.5rem; background: #28a745; 
+            color: white; border: none; border-radius: 10px; cursor: pointer; 
         }
-        #container { position: relative; display: inline-block; width: 100%; max-width: 800px; }
-        video { width: 100%; border-radius: 15px; background: #222; }
-        #overlay {
-            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-            pointer-events: none; border: 5px solid transparent; transition: border 0.1s;
-        }
-        #status { 
-            background: rgba(0,0,0,0.7); padding: 15px; font-size: 1.2rem; 
-            font-weight: bold; position: fixed; bottom: 0; width: 100%;
-        }
-        .btn-start {
-            background: #28a745; color: white; border: none; padding: 20px 40px;
-            font-size: 1.5rem; border-radius: 50px; cursor: pointer; margin-top: 20px;
-        }
+        .warning-red { color: #ff4d4d; }
+        .warning-yellow { color: #ffcc00; }
+        .warning-green { color: #4dff4d; }
     </style>
 </head>
 <body>
 
-    <div id="container">
-        <video id="webcam" autoplay playsinline muted></video>
-        <div id="overlay"></div>
-    </div>
-
-    <div id="status">
-        <button class="btn-start" id="startBtn">System starten</button>
+    <video id="webcam" autoplay playsinline></video>
+    
+    <div id="ui">
+        <div id="info">System bereit</div>
+        <div id="distText" class="distance-display">---</div>
+        <button id="startBtn">AKTIVIEREN & SOUND AN</button>
     </div>
 
     <script>
         const video = document.getElementById('webcam');
-        const status = document.getElementById('status');
-        const overlay = document.getElementById('overlay');
+        const distText = document.getElementById('distText');
         const startBtn = document.getElementById('startBtn');
+        const info = document.getElementById('info');
         
         let model;
         let audioCtx;
         let nextBeepTime = 0;
 
-        // Sound-Funktion
-        function playBeep(freq, duration) {
+        // Erzeugt den Piepton (800Hz = klassischer Parkwarner-Ton)
+        function playBeep(duration) {
             if (!audioCtx) return;
             const osc = audioCtx.createOscillator();
             const gain = audioCtx.createGain();
-            osc.type = 'square'; // Klingt eher nach Auto-Sensor
-            osc.frequency.value = freq;
             
-            gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+            osc.type = 'sine'; 
+            osc.frequency.setValueAtTime(800, audioCtx.currentTime);
+            
+            gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
             gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
             
             osc.connect(gain);
@@ -70,75 +59,69 @@
             osc.stop(audioCtx.currentTime + duration);
         }
 
-        async function setupCamera() {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ 
-                    video: { facingMode: "environment" } // Nutzt die Rückkamera falls vorhanden
-                });
-                video.srcObject = stream;
-                return new Promise(resolve => video.onloadedmetadata = resolve);
-            } catch (err) {
-                alert("Kamerafehler: " + err.message);
-            }
+        async function init() {
+            // Kamera-Zugriff (Versucht die externe oder Rück-Kamera)
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { facingMode: "environment" } 
+            });
+            video.srcObject = stream;
+
+            // KI Modell laden
+            info.innerText = "Lade KI-Modell...";
+            model = await cocoSsd.load();
+            info.innerText = "Radar läuft!";
+            
+            detectFrame();
         }
 
-        async function predictLoop() {
-            if (!model) return;
-
+        async function detectFrame() {
             const predictions = await model.detect(video);
-            let maxArea = 0;
+            let largestObjectArea = 0;
 
             predictions.forEach(p => {
-                // Nur Objekte beachten, die keine Personen sind (optional, hier für alles)
+                // Berechnet Größe des Objekts im Bild (0.0 bis 1.0)
                 const area = (p.bbox[2] * p.bbox[3]) / (video.videoWidth * video.videoHeight);
-                if (area > maxArea) maxArea = area;
+                if (area > largestObjectArea) largestObjectArea = area;
             });
 
             const now = audioCtx.currentTime;
 
-            if (maxArea > 0.05) { // Hindernis erkannt
-                if (maxArea > 0.55) {
+            if (largestObjectArea > 0.05) { // Objekt erkannt
+                if (largestObjectArea > 0.6) {
                     // DAUERTON (Ganz nah)
-                    overlay.style.borderColor = "red";
-                    status.innerText = "STOPP! KRITISCH";
+                    distText.innerText = "STOPP";
+                    distText.className = "distance-display warning-red";
                     if (now > nextBeepTime) {
-                        playBeep(1200, 0.2);
-                        nextBeepTime = now + 0.05;
+                        playBeep(0.4); 
+                        nextBeepTime = now + 0.05; // Sehr kurze Pause = Dauerton-Gefühl
                     }
                 } else {
-                    // INTERVALL (Nähert sich)
-                    overlay.style.borderColor = "yellow";
-                    status.innerText = "Abstand verringert sich...";
+                    // INTERVALL-PIEPEN
+                    distText.innerText = "ACHTUNG";
+                    distText.className = "distance-display warning-yellow";
                     
-                    // Berechnet Intervall: Je größer die Fläche, desto kleiner die Pause
-                    let interval = 0.6 - (maxArea * 0.8);
-                    interval = Math.max(0.08, interval); 
+                    // Berechne Pause: Je größer das Objekt, desto kleiner die Pause
+                    // Bereich von ca. 0.7s (weit weg) bis 0.1s (nah dran)
+                    let pause = 0.8 - (largestObjectArea * 1.2);
+                    pause = Math.max(0.1, pause); 
 
                     if (now > nextBeepTime) {
-                        playBeep(800, 0.1);
-                        nextBeepTime = now + interval;
+                        playBeep(0.1);
+                        nextBeepTime = now + pause;
                     }
                 }
             } else {
-                overlay.style.borderColor = "transparent";
-                status.innerText = "Weg frei";
+                distText.innerText = "OK";
+                distText.className = "distance-display warning-green";
             }
 
-            requestAnimationFrame(predictLoop);
+            requestAnimationFrame(detectFrame);
         }
 
-        startBtn.onclick = async () => {
-            startBtn.style.display = "none";
-            status.innerText = "Initialisiere KI & Kamera...";
-            
-            // Audio-Kontext starten
+        startBtn.onclick = () => {
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            
-            // Modell laden (Wichtig: cocoSsd kleingeschrieben)
-            model = await cocoSsd.load();
-            
-            await setupCamera();
-            predictLoop();
+            startBtn.style.display = "none";
+            init();
         };
     </script>
 </body>
