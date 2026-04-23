@@ -3,57 +3,63 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Radar iPad Fit</title>
+    <title>Radar Zentriert</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
     <style>
-        /* Verhindert Scrollen und fixiert das Layout */
         html, body { 
             margin: 0; padding: 0; width: 100%; height: 100%; 
             background: #000; color: #fff; font-family: sans-serif; 
             overflow: hidden; display: flex; flex-direction: column; 
         }
 
-        /* Der Container hält das Video im Zaum */
+        /* Der Container hält alles zusammen */
         #video-container { 
             position: relative; 
-            flex: 1; /* Nimmt den restlichen Platz ein */
+            flex: 1; 
             width: 100vw; 
+            overflow: hidden; /* Schneidet Überstehendes ab */
             display: flex; 
             justify-content: center; 
             align-items: center;
-            background: #000;
         }
 
+        /* Video perfekt zentriert */
         video { 
-            max-width: 100%; 
-            max-height: 100%; 
-            object-fit: contain; /* Bild wird skaliert, aber nicht abgeschnitten */
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%); /* Das schiebt es exakt in die Mitte */
+            min-width: 100%; 
+            min-height: 100%;
+            width: auto;
+            height: auto;
+            object-fit: contain; 
             z-index: 1;
         }
 
         #overlay { 
-            position: absolute; top: 0; left: 0; right: 0; bottom: 0;
-            border: 15px solid transparent; pointer-events: none; z-index: 10; 
+            position: absolute; inset: 0; 
+            border: 20px solid transparent; 
+            pointer-events: none; z-index: 10; 
+            transition: border 0.1s;
         }
 
         #distance-info { 
             position: absolute; top: 15%; width: 100%; text-align: center; 
-            font-size: clamp(2rem, 10vw, 5rem); font-weight: 900; z-index: 20; 
+            font-size: 4rem; font-weight: 900; z-index: 20; 
             text-shadow: 0 0 20px #000; pointer-events: none;
         }
 
-        /* Die Steuerungsleiste unten */
         #controls { 
-            background: #111; padding: 15px; 
+            background: #111; padding: 20px; 
             display: grid; grid-template-columns: 1fr 1fr; gap: 10px; 
-            border-top: 1px solid #333; z-index: 30;
+            z-index: 30; border-top: 1px solid #333;
         }
 
         .full { grid-column: span 2; }
-        button, select { padding: 15px; border-radius: 12px; border: none; background: #333; color: white; font-size: 1rem; }
+        button, select { padding: 18px; border-radius: 12px; border: none; background: #333; color: white; font-size: 1.1rem; }
         input[type=range] { width: 100%; margin: 10px 0; }
-        label { font-size: 0.7rem; color: #888; }
     </style>
 </head>
 <body>
@@ -68,10 +74,9 @@
         <select id="cameraSelect" class="full"></select>
         <button id="toggleSound" onclick="toggleSound()" style="background:#007aff">🔊 TON AN</button>
         <div class="full">
-            <label>SENSITIVITÄT (Wann soll es piepen?):</label>
-            <input type="range" id="sensRange" min="5" max="70" value="20">
+            <input type="range" id="sensRange" min="5" max="70" value="25">
         </div>
-        <button id="startBtn" onclick="startSystem()" style="background:#28a745; font-weight:bold">START</button>
+        <button id="startBtn" onclick="startSystem()" class="full" style="background:#28a745; font-weight:bold">SYSTEM STARTEN</button>
     </div>
 
     <canvas id="analyzer" width="64" height="64" style="display:none;"></canvas>
@@ -93,11 +98,9 @@
                 const devices = await navigator.mediaDevices.enumerateDevices();
                 const vids = devices.filter(d => d.kind === 'videoinput');
                 camSelect.innerHTML = vids.map((d, i) => 
-                    `<option value="${d.deviceId}">${d.label || 'Cam '+(i+1)}</option>`
+                    `<option value="${d.deviceId}">${d.label || 'Kamera '+(i+1)}</option>`
                 ).join('');
-            } catch (e) {
-                distInfo.innerText = "Kamera prüfen!";
-            }
+            } catch (e) { distInfo.innerText = "Kamera-Fehler"; }
         }
         getCams();
 
@@ -121,9 +124,7 @@
                 model = await cocoSsd.load();
                 startBtn.style.display = "none";
                 detect();
-            } catch (err) {
-                alert("Start-Fehler: " + err.message);
-            }
+            } catch (err) { alert("Start-Fehler: " + err.message); }
         }
 
         function beep(f, d) {
@@ -137,6 +138,7 @@
         }
 
         async function detect() {
+            if (!model) return;
             const predictions = await model.detect(video);
             
             ctx.drawImage(video, 0, 0, 64, 64);
@@ -160,7 +162,6 @@
 
             if (frameMax < 0.1 && wallVal > 12) frameMax = wallVal / 35;
 
-            // Schnelle Reaktion: 0.5/0.5 Mix
             smoothedArea = (smoothedArea * 0.5) + (frameMax * 0.5);
             const threshold = document.getElementById('sensRange').value / 100;
             const now = audioCtx.currentTime;
