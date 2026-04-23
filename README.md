@@ -1,1 +1,99 @@
-# radar
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KI Park-Assistent</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+    <style>
+        body { font-family: sans-serif; text-align: center; background: #111; color: white; }
+        video { width: 100%; max-width: 600px; border-radius: 10px; }
+        #status { font-size: 1.5rem; margin-top: 20px; }
+    </style>
+</head>
+<body>
+
+    <h2>🚗 iPad Park-Warner</h2>
+    <video id="webcam" autoplay playsinline></video>
+    <div id="status">Suche nach Objekten...</div>
+
+    <script>
+        const video = document.getElementById('webcam');
+        const status = document.getElementById('status');
+        let model;
+        let audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        let nextBeepTime = 0;
+
+        // Sound-Funktion: Erzeugt einen kurzen Piepton
+        function playBeep(duration = 0.1) {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.frequency.value = 880; // Tonhöhe
+            osc.start();
+            setTimeout(() => osc.stop(), duration * 1000);
+        }
+
+        async function setupCamera() {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            video.srcObject = stream;
+            return new Promise(resolve => video.onloadedmetadata = resolve);
+        }
+
+        async function detect() {
+            const predictions = await model.detect(video);
+            let minDistance = 0; // Wir nutzen die Fläche des Objekts als "Nähe"
+
+            predictions.forEach(p => {
+                // Wir berechnen, wie viel Prozent des Bildes das Objekt einnimmt
+                const area = (p.bbox[2] * p.bbox[3]) / (video.videoWidth * video.videoHeight);
+                if (area > minDistance) minDistance = area;
+            });
+
+            // Logik für die Pieptöne
+            if (minDistance > 0.05) { // Objekt erkannt
+                status.innerText = "Objekt erkannt! " + Math.round(minDistance * 100) + "%";
+                
+                let now = audioCtx.currentTime;
+                if (minDistance > 0.6) {
+                    // Dauerton bei sehr großer Nähe
+                    if (now > nextBeepTime) {
+                        playBeep(0.5);
+                        nextBeepTime = now + 0.1;
+                    }
+                    status.style.color = "red";
+                } else {
+                    // Intervall-Piepen: Je näher (größer), desto schneller
+                    let interval = 0.8 - (minDistance * 1.2); 
+                    interval = Math.max(0.1, interval); // Nicht schneller als 0.1s
+                    
+                    if (now > nextBeepTime) {
+                        playBeep(0.1);
+                        nextBeepTime = now + interval;
+                    }
+                    status.style.color = "yellow";
+                }
+            } else {
+                status.innerText = "Weg frei";
+                status.style.color = "green";
+            }
+
+            requestAnimationFrame(detect);
+        }
+
+        async function main() {
+            status.innerText = "Lade KI-Modell...";
+            model = await coco-ssd.load();
+            await setupCamera();
+            status.innerText = "Bereit! Tippe, um Audio zu starten.";
+            
+            // AudioContext muss durch User-Interaktion gestartet werden (Apple Policy)
+            window.onclick = () => { audioCtx.resume(); detect(); };
+        }
+
+        main();
+    </script>
+</body>
+</html>
