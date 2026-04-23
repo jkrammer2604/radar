@@ -3,43 +3,70 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Radar Compact</title>
+    <title>Radar Kompakt & Zentriert</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
     <style>
         * { box-sizing: border-box; }
-        body, html { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; font-family: sans-serif; }
-        
-        /* Video im Hintergrund */
-        #video-container { position: absolute; inset: 0; z-index: 1; }
-        video { width: 100%; height: 100%; object-fit: cover; }
+        body, html { 
+            margin: 0; padding: 0; width: 100%; height: 100%; 
+            background: #000; color: #fff; font-family: sans-serif; 
+            display: flex; flex-direction: column; overflow: hidden; 
+        }
 
-        /* Warnanzeige: Kleiner und dezenter oben */
+        /* Der Container hält das Video in der Mitte fest */
+        #video-container { 
+            flex: 1; 
+            display: flex; 
+            justify-content: center; 
+            align-items: center; 
+            background: #111; 
+            position: relative;
+            padding: 10px;
+        }
+
+        /* Video: Zentriert, kein Vollbild, behält Proportionen */
+        video { 
+            max-width: 100%; 
+            max-height: 100%; 
+            border: 2px solid #333;
+            border-radius: 8px;
+            display: block;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+        }
+
+        #overlay { 
+            position: absolute; 
+            /* Overlay direkt auf das Video-Maß begrenzen */
+            top: 50%; left: 50%; 
+            transform: translate(-50%, -50%);
+            width: 100%; height: 100%;
+            max-width: 100%; max-height: 100%;
+            border: 15px solid transparent; 
+            pointer-events: none; z-index: 10; 
+        }
+
         #distance-info { 
-            position: absolute; top: 50px; width: 100%; text-align: center; 
-            font-size: 3rem; font-weight: bold; z-index: 20; 
+            position: absolute; top: 30px; width: 100%; text-align: center; 
+            font-size: 2.5rem; font-weight: bold; z-index: 20; 
             text-shadow: 0 0 10px #000; pointer-events: none; 
         }
 
-        #overlay { position: absolute; inset: 0; border: 15px solid transparent; pointer-events: none; z-index: 10; }
-
-        /* Steuerung: Kompakter am unteren Rand */
+        /* Steuerung kompakt unten */
         #controls { 
-            position: absolute; bottom: 0; width: 100%; 
-            background: rgba(0, 0, 0, 0.8); padding: 10px; 
-            display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; 
-            z-index: 30; backdrop-filter: blur(10px);
+            background: #1a1a1a; padding: 15px; 
+            display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; 
+            border-top: 1px solid #333;
         }
 
         .full { grid-column: span 3; }
         button, select { 
-            padding: 12px; border-radius: 8px; border: none; 
+            padding: 12px; border-radius: 10px; border: none; 
             background: #333; color: white; font-size: 0.9rem; 
         }
         
-        /* Kleinerer Slider */
-        input[type=range] { width: 100%; height: 20px; margin: 5px 0; }
-        label { font-size: 0.7rem; color: #bbb; display: block; }
+        input[type=range] { width: 100%; margin: 5px 0; }
+        label { font-size: 0.7rem; color: #888; display: block; }
     </style>
 </head>
 <body>
@@ -47,18 +74,18 @@
     <div id="video-container">
         <video id="webcam" autoplay playsinline muted></video>
         <div id="overlay"></div>
-        <div id="distance-info">BEREIT</div>
+        <div id="distance-info">STOP</div>
     </div>
 
     <div id="controls">
         <select id="cameraSelect">
-            <option>Lade Kameras...</option>
+            <option>Suche...</option>
         </select>
         <button id="toggleSound" onclick="toggleSound()" style="background:#007aff">🔊 TON</button>
         <button id="startBtn" onclick="startSystem()" style="background:#28a745; font-weight:bold">START</button>
         
         <div class="full">
-            <label>SENSITIVITÄT (Wand & Objekte):</label>
+            <label>SENSITIVITÄT:</label>
             <input type="range" id="sensRange" min="5" max="80" value="25">
         </div>
     </div>
@@ -84,7 +111,7 @@
                 camSelect.innerHTML = vids.map((d, i) => 
                     `<option value="${d.deviceId}">${d.label || 'Cam '+(i+1)}</option>`
                 ).join('');
-            } catch (e) { distInfo.innerText = "Cam Error"; }
+            } catch (e) { distInfo.innerText = "Cam-Fehler"; }
         }
         getCams();
 
