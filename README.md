@@ -3,82 +3,73 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Park-Radar Calliope</title>
+    <title>Radar Bluetooth</title>
     <style>
-        * { box-sizing: border-box; }
-        body, html { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; color: #fff; font-family: sans-serif; display: flex; flex-direction: column; overflow: hidden; }
-        
-        #video-container { flex: 1; display: flex; justify-content: center; align-items: center; position: relative; background: #111; padding: 10px; }
-        video { max-width: 100%; max-height: 100%; border-radius: 12px; border: 2px solid #444; }
-
-        #distance-info { position: absolute; top: 40px; width: 100%; text-align: center; font-size: 5rem; font-weight: 900; text-shadow: 0 0 20px #000; z-index: 10; transition: color 0.2s; }
-
-        #controls { background: #1a1a1a; padding: 15px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; border-top: 1px solid #333; z-index: 20; }
-        button, select { padding: 15px; border-radius: 12px; border: none; background: #333; color: white; font-size: 1rem; cursor: pointer; }
-        .active { background: #28a745 !important; }
+        body { margin: 0; background: #000; color: white; font-family: sans-serif; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+        #video-container { flex: 1; display: flex; justify-content: center; align-items: center; position: relative; background: #111; }
+        video { max-width: 90%; max-height: 80%; border-radius: 15px; border: 2px solid #444; }
+        #dist-info { position: absolute; top: 10%; width: 100%; text-align: center; font-size: 5rem; font-weight: 900; text-shadow: 0 0 20px #000; }
+        #controls { background: #1a1a1a; padding: 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        button { padding: 15px; border-radius: 12px; border: none; font-size: 1rem; color: white; background: #333; }
+        .btn-bt { background: #007aff; grid-column: span 2; font-weight: bold; }
     </style>
 </head>
 <body>
 
     <div id="video-container">
-        <div id="distance-info">--- cm</div>
+        <div id="dist-info">--- cm</div>
         <video id="webcam" autoplay playsinline muted></video>
     </div>
 
     <div id="controls">
-        <select id="cameraSelect"></select>
-        <button id="startCam">KAMERA AN</button>
-        <button id="connectSerial" style="grid-column: span 2; background: #007aff;">CALLIOPE VERBINDEN</button>
+        <button id="camBtn">KAMERA AN</button>
+        <button id="btBtn" class="btn-bt">CALLIOPE BLUETOOTH VERBINDEN</button>
     </div>
 
     <script>
-        const video = document.getElementById('webcam');
-        const distDisplay = document.getElementById('distance-info');
-        const camSelect = document.getElementById('cameraSelect');
+        let bluetoothDevice, uartCharacteristic;
 
-        // Kamera-Setup
-        async function init() {
-            const devices = await navigator.mediaDevices.enumerateDevices();
-            const vids = devices.filter(d => d.kind === 'videoinput');
-            camSelect.innerHTML = vids.map((d, i) => `<option value="${d.deviceId}">${d.label || 'Cam '+(i+1)}</option>`).join('');
-        }
-        init();
-
-        document.getElementById('startCam').onclick = async () => {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: camSelect.value } });
-            video.srcObject = stream;
-            document.getElementById('startCam').classList.add('active');
+        // Kamera starten
+        document.getElementById('camBtn').onclick = async () => {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            document.getElementById('webcam').srcObject = stream;
         };
 
-        // Calliope Serial-Verbindung
-        document.getElementById('connectSerial').onclick = async () => {
+        // Bluetooth Verbindung
+        document.getElementById('btBtn').onclick = async () => {
             try {
-                const port = await navigator.serial.requestPort();
-                await port.open({ baudRate: 115200 });
-                document.getElementById('connectSerial').innerText = "VERBUNDEN";
-                document.getElementById('connectSerial').classList.add('active');
+                // Suche nach Calliope
+                bluetoothDevice = await navigator.bluetooth.requestDevice({
+                    filters: [{ namePrefix: 'BBC micro:bit' }, { namePrefix: 'Calliope' }],
+                    optionalServices: ['6e400001-b5a3-f393-e0a9-e50e24dcca9e'] // UART Service
+                });
 
-                const decoder = new TextDecoderStream();
-                port.readable.pipeTo(decoder.writable);
-                const reader = decoder.readable.getReader();
+                const server = await bluetoothDevice.gatt.connect();
+                const service = await server.getPrimaryService('6e400001-b5a3-f393-e0a9-e50e24dcca9e');
+                uartCharacteristic = await service.getCharacteristic('6e400001-b5a3-f393-e0a9-e50e24dcca9e');
 
-                while (true) {
-                    const { value, done } = await reader.read();
-                    if (done) break;
-                    if (value) {
-                        const match = value.match(/D:(\d+)/);
+                await uartCharacteristic.startNotifications();
+                document.getElementById('btBtn').innerText = "VERBUNDEN";
+                document.getElementById('btBtn').style.background = "#28a745";
+
+                let buffer = "";
+                uartCharacteristic.addEventListener('characteristicvaluechanged', (event) => {
+                    let decoder = new TextDecoder();
+                    let str = decoder.decode(event.target.value);
+                    buffer += str;
+
+                    // Wir suchen nach dem "!" Trennzeichen
+                    if (buffer.includes("!")) {
+                        const match = buffer.match(/D:(\d+)/);
                         if (match) {
-                            const d = parseInt(match[1]);
-                            distDisplay.innerText = d + " cm";
-                            
-                            // Farbe ändern
-                            if (d < 15) distDisplay.style.color = "#ff3b30";
-                            else if (d < 40) distDisplay.style.color = "#ffcc00";
-                            else distDisplay.style.color = "#4cd964";
+                            const d = match[1];
+                            document.getElementById('dist-info').innerText = d + " cm";
+                            document.getElementById('dist-info').style.color = d < 20 ? "red" : "green";
                         }
+                        buffer = ""; // Buffer leeren
                     }
-                }
-            } catch (e) { alert("Serial Fehler: " + e.message); }
+                });
+            } catch (err) { alert("BT Fehler: " + err); }
         };
     </script>
 </body>
