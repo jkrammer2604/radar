@@ -1,178 +1,89 @@
-
 <!DOCTYPE html>
 <html lang="de">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Calliope Park-Assistent (Bluetooth)</title>
+    <title>MotionKit v2 Steuerung</title>
     <style>
-        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-        body {
-            margin: 0; background-color: #050505; color: #ffffff;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+        body { margin: 0; background: #1a1a1a; color: white; font-family: sans-serif; text-align: center; user-select: none; -webkit-user-select: none; }
+        #cam { width: 100%; height: 40vh; background: #000; object-fit: cover; }
+        #info { padding: 15px; font-size: 1.5rem; background: #222; display: flex; justify-content: space-around; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; width: 300px; margin: 20px auto; }
+        button { 
+            padding: 25px; border-radius: 20px; border: none; font-size: 2rem; 
+            background: #444; color: white; touch-action: none;
         }
-
-        /* Video Container */
-        #viewport {
-            flex: 1; position: relative; display: flex;
-            justify-content: center; align-items: center; background: #000;
-        }
-        video {
-            width: 100%; height: 100%; object-fit: cover;
-            border-bottom: 2px solid #333;
-        }
-
-        /* Overlay für Distanz */
-        #overlay-dist {
-            position: absolute; top: 15%; width: 100%;
-            text-align: center; pointer-events: none; z-index: 10;
-        }
-        #dist-text {
-            font-size: 7rem; font-weight: 900; margin: 0;
-            text-shadow: 0 0 30px rgba(0,0,0,0.8);
-            transition: color 0.3s ease; color: #4cd964;
-        }
-        #unit { font-size: 2rem; margin-left: 5px; }
-
-        /* Status Bar */
-        #status-bar {
-            background: rgba(0,0,0,0.6); padding: 5px 15px;
-            font-size: 0.8rem; color: #aaa; text-align: center;
-        }
-
-        /* Steuerung unten */
-        #controls {
-            background: #1c1c1e; padding: 20px;
-            display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
-            padding-bottom: 40px;
-        }
-        button {
-            padding: 18px; border-radius: 14px; border: none;
-            font-size: 1.1rem; font-weight: 600; cursor: pointer;
-            transition: opacity 0.2s;
-        }
-        button:active { opacity: 0.7; }
-        
-        #btn-connect {
-            grid-column: span 2; background-color: #007aff; color: white;
-        }
-        #btn-cam { background-color: #3a3a3c; color: white; }
-        #btn-reset { background-color: #3a3a3c; color: white; }
-
-        .connected { background-color: #28a745 !important; }
+        button:active { background: #007aff; }
+        .conn { background: #007aff; grid-column: span 3; font-size: 1.2rem; padding: 15px; margin-bottom: 10px; }
+        .dist { color: #4cd964; }
     </style>
 </head>
 <body>
 
-    <div id="viewport">
-        <div id="overlay-dist">
-            <p id="dist-text">---<span id="unit">cm</span></p>
-        </div>
-        <video id="webcam" autoplay playsinline muted></video>
+    <video id="cam" autoplay playsinline muted></video>
+
+    <div id="info">
+        <div id="status">Bereit</div>
+        <div class="dist"><span id="d">---</span> cm</div>
     </div>
 
-    <div id="status-bar">Warte auf Verbindung...</div>
-
-    <div id="controls">
-        <button id="btn-connect">CALLIOPE BLUETOOTH VERBINDEN</button>
-        <button id="btn-cam">KAMERA AN</button>
-        <button id="btn-reset" onclick="location.reload()">RELOAD</button>
+    <div class="grid">
+        <button id="connect" class="conn">CALLIOPE VERBINDEN</button>
+        
+        <div></div>
+        <button onpointerdown="send('W\n')" onpointerup="send('Q\n')">▲</button>
+        <div></div>
+        
+        <button onpointerdown="send('A\n')" onpointerup="send('Q\n')">◀</button>
+        <button onpointerdown="send('S\n')" onpointerup="send('Q\n')">▼</button>
+        <button onpointerdown="send('D\n')" onpointerup="send('Q\n')">▶</button>
     </div>
 
     <script>
-        const distText = document.getElementById('dist-text');
-        const statusBar = document.getElementById('status-bar');
-        const btnConnect = document.getElementById('btn-connect');
-        const video = document.getElementById('webcam');
+        let rx; // Zum Senden an Calliope
+        const dEl = document.getElementById('d');
+        const sEl = document.getElementById('status');
 
-        let bluetoothDevice, uartCharacteristic;
-        let receiveBuffer = "";
+        // Kamera aktivieren
+        navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
+            .then(s => document.getElementById('cam').srcObject = s);
 
-        // Kamera starten
-        document.getElementById('btn-cam').onclick = async () => {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ 
-                    video: { facingMode: "environment" } 
-                });
-                video.srcObject = stream;
-            } catch (err) {
-                alert("Kamera-Fehler: " + err.message);
+        // Senden-Funktion mit "neuer Zeile" (\n)
+        async function send(msg) {
+            if (rx) {
+                try {
+                    await rx.writeValue(new TextEncoder().encode(msg));
+                } catch (e) { console.log("Senden fehlgeschlagen"); }
             }
-        };
+        }
 
-        // Bluetooth Logik
-        btnConnect.onclick = async () => {
+        document.getElementById('connect').onclick = async () => {
             try {
-                statusBar.innerText = "Suche nach Calliope...";
-                
-                bluetoothDevice = await navigator.bluetooth.requestDevice({
-                    filters: [
-                        { namePrefix: 'BBC micro:bit' },
-                        { namePrefix: 'Calliope' }
-                    ],
+                const device = await navigator.bluetooth.requestDevice({
+                    filters: [{ namePrefix: 'BBC' }, { namePrefix: 'Calliope' }],
                     optionalServices: ['6e400001-b5a3-f393-e0a9-e50e24dcca9e']
                 });
-
-                statusBar.innerText = "Verbinde...";
-                const server = await bluetoothDevice.gatt.connect();
-                
+                const server = await device.gatt.connect();
                 const service = await server.getPrimaryService('6e400001-b5a3-f393-e0a9-e50e24dcca9e');
                 
-                // Charakteristik 0002 ist für den Empfang vom Calliope zum iPad
-                uartCharacteristic = await service.getCharacteristic('6e400002-b5a3-f393-e0a9-e50e24dcca9e');
+                // Charakteristiken für UART
+                rx = await service.getCharacteristic('6e400003-b5a3-f393-e0a9-e50e24dcca9e');
+                const tx = await service.getCharacteristic('6e400002-b5a3-f393-e0a9-e50e24dcca9e');
 
-                await uartCharacteristic.startNotifications();
-                
-                btnConnect.innerText = "VERBUNDEN";
-                btnConnect.classList.add('connected');
-                statusBar.innerText = "Daten werden empfangen...";
-
-                uartCharacteristic.addEventListener('characteristicvaluechanged', (event) => {
-                    let value = event.target.value;
-                    let str = new TextDecoder().decode(value);
-                    receiveBuffer += str;
-
-                    if (receiveBuffer.includes("!")) {
-                        let parts = receiveBuffer.split("!");
-                        let lastValid = parts[parts.length - 2]; 
-                        
-                        let match = lastValid.match(/D:(\d+)/);
-                        if (match) {
-                            let d = parseInt(match[1]);
-                            updateDisplay(d);
-                        }
-                        receiveBuffer = parts[parts.length - 1];
+                await tx.startNotifications();
+                tx.addEventListener('characteristicvaluechanged', (e) => {
+                    let text = new TextDecoder().decode(e.target.value);
+                    if (text.includes("D:")) {
+                        let match = text.match(/D:(\d+)/);
+                        if (match) dEl.innerText = match[1];
                     }
                 });
 
-                bluetoothDevice.addEventListener('gattserverdisconnected', () => {
-                    btnConnect.innerText = "GETRENNT - NEU VERBINDEN";
-                    btnConnect.classList.remove('connected');
-                    statusBar.innerText = "Verbindung verloren.";
-                });
-
-            } catch (err) {
-                statusBar.innerText = "Fehler: " + err.message;
-            }
+                sEl.innerText = "Verbunden!";
+                document.getElementById('connect').style.background = "#28a745";
+                document.getElementById('connect').innerText = "VERBUNDEN";
+            } catch (e) { alert("Verbindungsfehler: " + e); }
         };
-
-        function updateDisplay(d) {
-            distText.innerText = d;
-            
-            if (d < 15) {
-                distText.style.color = "#ff3b30";
-            } else if (d < 40) {
-                distText.style.color = "#ffcc00";
-            } else {
-                distText.style.color = "#4cd964";
-            }
-            
-            const span = document.createElement('span');
-            span.id = 'unit';
-            span.innerText = 'cm';
-            distText.appendChild(span);
-        }
     </script>
 </body>
 </html>
